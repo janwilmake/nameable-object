@@ -1,3 +1,8 @@
+# Nameable Object
+
+> ![WARNING]
+> Does NOT work. https://x.com/janwilmake/status/1937482288226271484
+
 Usage:
 
 1. `npm i nameable-object`
