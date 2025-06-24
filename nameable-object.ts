@@ -55,6 +55,7 @@ export class NameableHandler {
     if (name === "_registry") {
       try {
         const results = this.storage.sql
+          //@ts-ignore
           .exec<RegistryEntry>(
             `
           SELECT id, name, database_size, created_at, updated_at 

@@ -1,6 +1,10 @@
 {
   "name": "nameable-object",
   "version": "0.0.1",
+  "main": "nameable-object.ts",
+  "files": [
+    "nameable-object.ts"
+  ],
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0"
   }
