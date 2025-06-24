@@ -2,6 +2,8 @@
   "name": "nameable-object",
   "compatibility_date": "2025-06-24",
   "main": "example.ts",
+  "dev": { "port": 3000 },
+  "routes": [{ "custom_domain": true, "pattern": "nameable.itscooldo.com" }],
   "durable_objects": {
     "bindings": [
       {
