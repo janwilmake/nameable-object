@@ -38,4 +38,10 @@ ${JSON.stringify(registry, undefined, 2)}`,
 
 See [example.ts](example.ts) for the demonstrations of both!
 
-Please note that this works by doing a call to an added `_registry` instance on your DO where it maintains a registry table in SQLite. Therefore, this can become a bottleneck and may start failing on high amount of requests. Please use at your own risk. [Feedback appreciated](https://x.com/janwilmake)!
+Please note that this works by doing a call to an added `_registry` instance on your DO where it maintains a registry table in SQLite. Therefore, this can become a bottleneck and may start failing on high amount of requests. Please use at your own risk. [Feedback appreciated](https://x.com/janwilmake/status/1937482288226271484)!
+
+TODO:
+
+- Wait for https://github.com/janwilmake/test-do-name to work in prod
+- May never be needed (if CF may keep a list WITH names)
+- Let's see!

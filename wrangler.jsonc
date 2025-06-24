@@ -1,5 +1,5 @@
 {
-  "name": "nameable-object",
+  "name": "itscooldo_nameable",
   "compatibility_date": "2025-06-24",
   "main": "example.ts",
   "dev": { "port": 3000 },
@@ -7,15 +7,15 @@
   "durable_objects": {
     "bindings": [
       {
-        "name": "MY_DO",
-        "class_name": "MyDurableObject"
+        "name": "TEST_DO",
+        "class_name": "Test123"
       }
     ]
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["MyDurableObject"]
+      "new_sqlite_classes": ["Test123"]
     }
   ]
 }

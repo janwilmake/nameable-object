@@ -4,251 +4,375 @@
 
 import { DurableObject } from "cloudflare:workers";
 
+const DO_REGISTRY_INSTANCE = "_registry";
+
 export interface RegistryEntry {
   id: string;
   name: string;
-  database_size: number;
-  created_at: string;
-  updated_at: string;
+  created_at: number;
 }
 
 export interface NameableConfig {
   doBindingKey: string;
 }
 
-export const REGISTRY_INSTANCE = "_registry";
-// Registry handler class
+export interface NameableResult {
+  success: boolean;
+  message?: string;
+  data?: any;
+  error?: string;
+}
+
+// NameableHandler class
 export class NameableHandler {
-  storage: DurableObjectStorage;
+  private storage: DurableObjectStorage;
+  private sql: SqlStorage;
   private config: NameableConfig;
   private env: any;
+  private ctx: any;
+  private id: DurableObjectId;
+  private isRegistry: boolean;
 
   constructor(private durableObject: DurableObject, config: NameableConfig) {
     //@ts-ignore
-    this.storage = durableObject.ctx.storage;
+    this.ctx = durableObject.ctx;
+    this.storage = this.ctx.storage;
+    this.sql = this.storage.sql;
     //@ts-ignore
     this.env = durableObject.env;
     this.config = config;
-    //@ts-ignore
-    if (durableObject.ctx.id.name === REGISTRY_INSTANCE) {
-      try {
-        this.storage.sql.exec(`
-        CREATE TABLE IF NOT EXISTS _do_registry (
+    this.id = this.ctx.id;
+    this.isRegistry = this.id.name === DO_REGISTRY_INSTANCE;
+
+    // Initialize registry table if this is the registry instance
+    if (this.isRegistry) {
+      this.sql.exec(
+        `CREATE TABLE IF NOT EXISTS _do_registry (
           id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
-          database_size INTEGER NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        )
-      `);
-      } catch (error) {
-        console.error("Failed to initialize registry table:", error);
-      }
+          created_at INTEGER NOT NULL
+        )`,
+      );
     }
   }
 
-  // Get all registry entries (public method for the registry DO)
-  async getRegistry(): Promise<RegistryEntry[]> {
-    const name = await this.storage.get("_name");
-    if (name === REGISTRY_INSTANCE) {
-      try {
-        const results = this.storage.sql
-          //@ts-ignore
-          .exec<RegistryEntry>(
-            `
-          SELECT id, name, database_size, created_at, updated_at 
-          FROM _do_registry 
-          ORDER BY created_at DESC
-        `,
-          )
-          .toArray();
+  // Private method - exposed via internal fetch
+  private async updateRegistry(): Promise<NameableResult> {
+    try {
+      const registryId =
+        this.env[this.config.doBindingKey].idFromName(DO_REGISTRY_INSTANCE);
+      const registryStub = this.env[this.config.doBindingKey].get(registryId);
 
-        return results;
-      } catch (error) {
-        console.error("Failed to get registry:", error);
-        return [];
-      }
+      const name =
+        (await this.storage.get<string>("_name")) ||
+        this.id.name ||
+        this.id.toString();
+
+      const response = await registryStub.fetch(
+        new Request("http://internal/_nameable/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: this.id.toString(),
+            name: name,
+            created_at: Date.now(),
+          }),
+        }),
+      );
+
+      const result = (await response.json()) as NameableResult;
+      return result;
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to update registry: ${String(error)}`,
+      };
+    }
+  }
+
+  // Private method - exposed via internal fetch
+  private async deleteFromRegistry(id: string): Promise<NameableResult> {
+    if (!this.isRegistry) {
+      return {
+        success: false,
+        error: "This method can only be called on the registry instance",
+      };
     }
 
-    const namespace = this.env[this.config.doBindingKey];
-    if (!namespace) {
-      console.error(
-        `DO namespace ${this.config.doBindingKey} not found in env`,
+    try {
+      this.sql.exec("DELETE FROM _do_registry WHERE id = ?", id);
+      return {
+        success: true,
+        message: `Deleted ${id} from registry`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to delete from registry: ${String(error)}`,
+      };
+    }
+  }
+
+  // Private method for registry instance to handle updates
+  async handleRegistryUpdate(data: RegistryEntry): Promise<NameableResult> {
+    if (!this.isRegistry) {
+      return {
+        success: false,
+        error: "This method can only be called on the registry instance",
+      };
+    }
+
+    console.log("inserting", data);
+
+    try {
+      this.sql
+        .exec(
+          `INSERT OR REPLACE INTO _do_registry (id, name, created_at) VALUES (?, ?, ?)`,
+          data.id,
+          data.name,
+          data.created_at,
+        )
+        .toArray();
+      return {
+        success: true,
+        message: `Updated registry for ${data.id}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to update registry: ${String(error)}`,
+      };
+    }
+  }
+
+  // Public method
+  async getRegistry(): Promise<RegistryEntry[]> {
+    try {
+      const registryId =
+        this.env[this.config.doBindingKey].idFromName(DO_REGISTRY_INSTANCE);
+      const registryStub = this.env[this.config.doBindingKey].get(registryId);
+
+      const response = await registryStub.fetch(
+        new Request("http://internal/_nameable/list", {
+          method: "GET",
+        }),
       );
+
+      const result = (await response.json()) as NameableResult;
+      if (result.success && result.data) {
+        return result.data as RegistryEntry[];
+      }
+
+      throw new Error(result.error || "Failed to get registry");
+    } catch (error) {
+      console.error("Failed to get registry:", error);
+      return [];
+    }
+  }
+
+  // Public method
+  async safeDeleteAll(): Promise<NameableResult> {
+    try {
+      // First, remove from registry
+      const registryId =
+        this.env[this.config.doBindingKey].idFromName(DO_REGISTRY_INSTANCE);
+      const registryStub = this.env[this.config.doBindingKey].get(registryId);
+
+      const response = await registryStub.fetch(
+        new Request("http://internal/_nameable/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: this.id.toString() }),
+        }),
+      );
+
+      const registryResult = (await response.json()) as NameableResult;
+
+      // Then delete all local storage
+      await this.storage.deleteAll();
+
+      return {
+        success: registryResult.success,
+        message: "Deleted all storage and removed from registry",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to safe delete all: ${String(error)}`,
+      };
+    }
+  }
+
+  // Initialize name and registry
+  async initializeNameAndRegistry(): Promise<void> {
+    console.log("waituntil call", this.isRegistry);
+    // Skip if this is the registry instance
+    if (this.isRegistry) {
       return;
     }
 
-    const registryId = namespace.idFromName(REGISTRY_INSTANCE);
-    const registryStub = namespace.get(registryId);
-    return registryStub.getRegistry();
-  }
+    console.log("ok");
 
-  // Update registry entry (called via RPC from other DOs)
-  async updateRegistry(
-    entry: Omit<RegistryEntry, "created_at" | "updated_at">,
-  ): Promise<void> {
-    try {
-      const now = new Date().toISOString();
-
-      this.storage.sql.exec(
-        `
-        INSERT INTO _do_registry (id, name, database_size, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          name = excluded.name,
-          database_size = excluded.database_size,
-          updated_at = excluded.updated_at
-      `,
-        entry.id,
-        entry.name || "",
-        entry.database_size,
-        now,
-        now,
-      );
-    } catch (error) {
-      console.error("Failed to update registry:", error);
-      throw error;
+    // Check if already initialized
+    const initialized = await this.storage.get<boolean>(
+      "_initialized_registry",
+    );
+    if (initialized) {
+      return;
     }
-  }
 
-  async getName(): Promise<string | null> {
-    return this.storage.get<string>("_name");
-  }
-
-  // Initialize name if not set and sync with registry
-  async initializeAndSyncName(): Promise<void> {
-    try {
-      //@ts-ignore
-      const doId = this.durableObject.ctx.id;
-      //@ts-ignore
-      const doName = doId.name;
-
-      // Skip if this is the registry DO itself
-      if (doName === REGISTRY_INSTANCE) {
-        return;
-      }
-
-      // Check if _name is already set in storage
-      let storedName = await this.storage.get<string>("_name");
-
-      // If no stored name but DO has a name, set it
-      if (!storedName && doName) {
-        storedName = doName;
-        await this.storage.put("_name", storedName);
-      }
-
-      // If we have a name (either stored or from DO), sync with registry
-      await this.syncWithRegistry(doId.toString(), storedName);
-    } catch (error) {
-      console.error("Failed to initialize and sync name:", error);
+    // Check and set name
+    let name = await this.storage.get<string>("_name");
+    if (!name && this.id.name) {
+      name = this.id.name;
+      await this.storage.put("_name", name);
     }
-  }
 
-  private async syncWithRegistry(
-    id: string,
-    name: string | undefined,
-  ): Promise<void> {
-    try {
-      const namespace = this.env[this.config.doBindingKey];
-      if (!namespace) {
-        console.error(
-          `DO namespace ${this.config.doBindingKey} not found in env`,
-        );
-        return;
-      }
+    // Update registry
+    await this.updateRegistry();
 
-      const registryId = namespace.idFromName(REGISTRY_INSTANCE);
-      const registryStub = namespace.get(registryId);
-
-      const databaseSize = this.storage.sql.databaseSize;
-
-      // Call the updateRegistry RPC method
-      await registryStub.updateRegistry({
-        id,
-        name,
-        database_size: databaseSize,
-      });
-    } catch (error) {
-      console.error("Failed to sync with registry:", error);
-    }
+    // Mark as initialized
+    await this.storage.put("_initialized_registry", true);
   }
 }
 
-// Decorator function that adds nameable functionality
-export function Nameable<T extends new (...args: any[]) => DurableObject>(
-  config: NameableConfig,
-) {
-  return function (constructor: T) {
+// Decorator function
+export function Nameable(config: NameableConfig) {
+  return function <T extends new (...args: any[]) => DurableObject>(
+    constructor: T,
+  ) {
     return class extends constructor {
-      public nameableHandler: NameableHandler;
+      public nameable: NameableHandler;
 
       constructor(...args: any[]) {
         super(...args);
-        this.nameableHandler = new NameableHandler(this, config);
+        this.nameable = new NameableHandler(this, config);
       }
 
-      // Override fetch to add registry sync and handle registry endpoints
+      // Override fetch to handle registry initialization and internal endpoints
       async fetch(request: Request) {
+        const url = new URL(request.url);
+
+        // Initialize registry on first fetch
         //@ts-ignore
-        const doName = this.ctx.id.name;
+        this.ctx.waitUntil(this.nameable.initializeNameAndRegistry());
 
-        // Add registry sync to waitUntil (skip for registry DO itself)
-        if (doName !== REGISTRY_INSTANCE) {
-          //@ts-ignore
-          this.ctx.waitUntil(this.nameableHandler.initializeAndSyncName());
+        // Handle internal nameable endpoints
+        if (url.pathname.startsWith("/_nameable/")) {
+          try {
+            const path = url.pathname.substring("/_nameable/".length);
+
+            switch (path) {
+              case "list": {
+                // Only registry instance can list
+                //@ts-ignore
+                if (this.ctx.id.name !== DO_REGISTRY_INSTANCE) {
+                  return new Response(
+                    JSON.stringify({
+                      success: false,
+                      error: "Only registry instance can list entries",
+                    }),
+                    {
+                      status: 403,
+                      headers: { "Content-Type": "application/json" },
+                    },
+                  );
+                }
+
+                //@ts-ignore
+                const entries = this.ctx.storage.sql
+                  .exec<RegistryEntry>(
+                    "SELECT id, name, created_at FROM _do_registry",
+                  )
+                  .toArray();
+
+                return new Response(
+                  JSON.stringify({
+                    success: true,
+                    data: entries,
+                  }),
+                  { headers: { "Content-Type": "application/json" } },
+                );
+              }
+
+              case "update": {
+                // Only registry instance can handle updates
+                console.log("UPDATE", this.ctx.id.name);
+                //@ts-ignore
+                if (this.ctx.id.name !== DO_REGISTRY_INSTANCE) {
+                  return new Response(
+                    JSON.stringify({
+                      success: false,
+                      error: "Only registry instance can handle updates",
+                    }),
+                    {
+                      status: 403,
+                      headers: { "Content-Type": "application/json" },
+                    },
+                  );
+                }
+
+                const data = (await request.json()) as RegistryEntry;
+                //@ts-ignore
+                console.log("UPDATE", data);
+
+                const result = await this.nameable.handleRegistryUpdate(data);
+
+                return new Response(JSON.stringify(result), {
+                  status: result.success ? 200 : 500,
+                  headers: { "Content-Type": "application/json" },
+                });
+              }
+
+              case "delete": {
+                // Only registry instance can handle deletes
+                //@ts-ignore
+                if (this.ctx.id.name !== DO_REGISTRY_INSTANCE) {
+                  return new Response(
+                    JSON.stringify({
+                      success: false,
+                      error: "Only registry instance can handle deletes",
+                    }),
+                    {
+                      status: 403,
+                      headers: { "Content-Type": "application/json" },
+                    },
+                  );
+                }
+
+                const { id } = (await request.json()) as { id: string };
+                //@ts-ignore
+                const result = await this.nameable.deleteFromRegistry(id);
+
+                return new Response(JSON.stringify(result), {
+                  status: result.success ? 200 : 500,
+                  headers: { "Content-Type": "application/json" },
+                });
+              }
+
+              default:
+                return new Response("Not found", { status: 404 });
+            }
+          } catch (error) {
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: `Nameable endpoint error: ${String(error)}`,
+              }),
+              {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+              },
+            );
+          }
         }
 
-        try {
-          const url = new URL(request.url);
-
-          // Handle registry endpoint (only for the registry DO)
-          if (
-            doName === REGISTRY_INSTANCE &&
-            url.pathname === "/registry" &&
-            request.method === "GET"
-          ) {
-            const registry = await this.nameableHandler.getRegistry();
-            return new Response(JSON.stringify(registry, undefined, 2), {
-              headers: { "Content-Type": "application/json" },
-              status: 200,
-            });
-          }
-
-          // Call original fetch if it exists and is overridden
-          if (super.fetch !== DurableObject.prototype.fetch) {
-            return super.fetch(request);
-          }
-
-          return new Response("Not found", { status: 404 });
-        } catch (error) {
-          console.error("Nameable fetch error:", error);
-          return new Response(
-            JSON.stringify({
-              success: false,
-              error: `Nameable operation failed: ${String(error)}`,
-            }),
-            {
-              status: 500,
-              headers: { "Content-Type": "application/json" },
-            },
-          );
+        // Call original fetch if it exists
+        if (super.fetch !== DurableObject.prototype.fetch) {
+          return super.fetch(request);
         }
-      }
 
-      // Expose updateRegistry as RPC method for the registry DO
-      async updateRegistry(
-        entry: Omit<RegistryEntry, "created_at" | "updated_at">,
-      ): Promise<void> {
-        return this.nameableHandler.updateRegistry(entry);
-      }
-
-      // Expose getRegistry as RPC method
-      async getRegistry(): Promise<RegistryEntry[]> {
-        return this.nameableHandler.getRegistry();
-      }
-
-      async getName(): Promise<string | null> {
-        return this.nameableHandler.getName();
+        return new Response("Not found", { status: 404 });
       }
     } as any;
   };
