@@ -16,6 +16,7 @@ export interface NameableConfig {
   doBindingKey: string;
 }
 
+export const REGISTRY_INSTANCE = "_registry";
 // Registry handler class
 export class NameableHandler {
   storage: DurableObjectStorage;
@@ -28,14 +29,10 @@ export class NameableHandler {
     //@ts-ignore
     this.env = durableObject.env;
     this.config = config;
-
-    // Initialize the registry table
-    this.initializeRegistryTable();
-  }
-
-  private initializeRegistryTable(): void {
-    try {
-      this.storage.sql.exec(`
+    //@ts-ignore
+    if (durableObject.ctx.id.name === REGISTRY_INSTANCE) {
+      try {
+        this.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS _do_registry (
           id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
@@ -44,15 +41,16 @@ export class NameableHandler {
           updated_at TEXT NOT NULL
         )
       `);
-    } catch (error) {
-      console.error("Failed to initialize registry table:", error);
+      } catch (error) {
+        console.error("Failed to initialize registry table:", error);
+      }
     }
   }
 
   // Get all registry entries (public method for the registry DO)
   async getRegistry(): Promise<RegistryEntry[]> {
     const name = await this.storage.get("_name");
-    if (name === "_registry") {
+    if (name === REGISTRY_INSTANCE) {
       try {
         const results = this.storage.sql
           //@ts-ignore
@@ -80,7 +78,7 @@ export class NameableHandler {
       return;
     }
 
-    const registryId = namespace.idFromName("_registry");
+    const registryId = namespace.idFromName(REGISTRY_INSTANCE);
     const registryStub = namespace.get(registryId);
     return registryStub.getRegistry();
   }
@@ -126,7 +124,7 @@ export class NameableHandler {
       const doName = doId.name;
 
       // Skip if this is the registry DO itself
-      if (doName === "_registry") {
+      if (doName === REGISTRY_INSTANCE) {
         return;
       }
 
@@ -159,7 +157,7 @@ export class NameableHandler {
         return;
       }
 
-      const registryId = namespace.idFromName("_registry");
+      const registryId = namespace.idFromName(REGISTRY_INSTANCE);
       const registryStub = namespace.get(registryId);
 
       const databaseSize = this.storage.sql.databaseSize;
@@ -195,7 +193,7 @@ export function Nameable<T extends new (...args: any[]) => DurableObject>(
         const doName = this.ctx.id.name;
 
         // Add registry sync to waitUntil (skip for registry DO itself)
-        if (doName !== "_registry") {
+        if (doName !== REGISTRY_INSTANCE) {
           //@ts-ignore
           this.ctx.waitUntil(this.nameableHandler.initializeAndSyncName());
         }
@@ -205,7 +203,7 @@ export function Nameable<T extends new (...args: any[]) => DurableObject>(
 
           // Handle registry endpoint (only for the registry DO)
           if (
-            doName === "_registry" &&
+            doName === REGISTRY_INSTANCE &&
             url.pathname === "/registry" &&
             request.method === "GET"
           ) {
