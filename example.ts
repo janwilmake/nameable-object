@@ -1,5 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
-import { Nameable, NameableHandler } from "./nameable-object";
+import {
+  Nameable,
+  NameableHandler,
+  REGISTRY_INSTANCE,
+} from "./nameable-object";
 
 @Nameable({ doBindingKey: "MY_DO" })
 export class MyDurableObject extends DurableObject {
@@ -33,7 +37,7 @@ export default {
 - visit GET /id/{id} for accessing a DO by its id`);
     }
     if (url.pathname === "/registry") {
-      const doObject = env.MY_DO.get(env.MY_DO.idFromName("_registry"));
+      const doObject = env.MY_DO.get(env.MY_DO.idFromName(REGISTRY_INSTANCE));
       return doObject.fetch(request);
     }
 
