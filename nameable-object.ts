@@ -102,7 +102,7 @@ export class NameableHandler {
           updated_at = excluded.updated_at
       `,
         entry.id,
-        entry.name,
+        entry.name || "",
         entry.database_size,
         now,
         now,
@@ -111,6 +111,10 @@ export class NameableHandler {
       console.error("Failed to update registry:", error);
       throw error;
     }
+  }
+
+  async getName(): Promise<string | null> {
+    return this.storage.get<string>("_name");
   }
 
   // Initialize name if not set and sync with registry
@@ -136,15 +140,16 @@ export class NameableHandler {
       }
 
       // If we have a name (either stored or from DO), sync with registry
-      if (storedName) {
-        await this.syncWithRegistry(doId.toString(), storedName);
-      }
+      await this.syncWithRegistry(doId.toString(), storedName);
     } catch (error) {
       console.error("Failed to initialize and sync name:", error);
     }
   }
 
-  private async syncWithRegistry(id: string, name: string): Promise<void> {
+  private async syncWithRegistry(
+    id: string,
+    name: string | undefined,
+  ): Promise<void> {
     try {
       const namespace = this.env[this.config.doBindingKey];
       if (!namespace) {
@@ -242,6 +247,10 @@ export function Nameable<T extends new (...args: any[]) => DurableObject>(
       // Expose getRegistry as RPC method
       async getRegistry(): Promise<RegistryEntry[]> {
         return this.nameableHandler.getRegistry();
+      }
+
+      async getName(): Promise<string | null> {
+        return this.nameableHandler.getName();
       }
     } as any;
   };
