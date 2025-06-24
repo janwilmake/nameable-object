@@ -1,0 +1,19 @@
+{
+  "name": "nameable-object",
+  "compatibility_date": "2025-06-24",
+  "main": "example.ts",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MY_DO",
+        "class_name": "MyDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["MyDurableObject"]
+    }
+  ]
+}
